@@ -63,6 +63,28 @@ NATIONAL = {
 }
 
 
+# --- Codigos de salida -------------------------------------------------------
+# Son la interfaz con la actualizacion automatica, que decide por el numero que
+# paso: si fue una republicacion abre un aviso, si fue otra cosa deja la corrida
+# en rojo y lo dice.
+#
+# El 1 no se usa para nada propio, y eso es el punto. Antes la republicacion
+# salia con 1, que es tambien con lo que Python sale ante cualquier excepcion
+# sin atrapar, asi que el workflow no podia distinguirlas. Paso de verdad: el 21
+# y el 22 de noviembre de 2026 el servidor de rasteres de FAO devolvio 502, la
+# construccion murio en la primera llamada de red y el aviso automatico
+# anuncio una republicacion que nunca ocurrio, recomendando relanzar con
+# --aceptar-republicacion. Ese es justo el comando que sobrescribe cifras ya
+# publicadas: el diagnostico equivocado apuntaba a la unica accion destructiva
+# que el constructor sabe hacer.
+#
+# Por eso un diagnostico del constructor tiene que ser un numero que un choque
+# no pueda producir por accidente. Lo comprueba tests/test_salidas.py.
+EXIT_OK = 0
+EXIT_ARGS = 2
+EXIT_REPUBLICACION = 3
+
+
 def log(msg=""):
     print(msg, flush=True)
 
@@ -529,7 +551,7 @@ def main(argv=None) -> int:
     unknown = [s for s in ids if s not in cfg.SERIES]
     if unknown:
         log(f"serie desconocida: {unknown}. Conocidas: {list(cfg.SERIES)}")
-        return 2
+        return EXIT_ARGS
 
     log(f"panel: {cfg.PANEL_DIR}")
     log(f"cache de rasteres: {cfg.CACHE}")
@@ -540,7 +562,7 @@ def main(argv=None) -> int:
         if not atrasadas:
             log(f"\nel panel llega al ultimo dekad cerrado ({cierre}): no hay "
                 f"nada que FAO pueda haber publicado todavia. Sin consultar.")
-            return 0
+            return EXIT_OK
         log(f"\nultimo dekad cerrado {cierre} - atrasadas: "
             + ", ".join(f"{s} en {d or 'vacia'}"
                         for s, d in sorted(atrasadas.items())))
@@ -619,11 +641,11 @@ def main(argv=None) -> int:
             "con --aceptar-republicacion.")
         log("=" * 68)
         if not args.aceptar_republicacion:
-            return 1
+            return EXIT_REPUBLICACION
 
     nuevos = sum(i["nuevos"] for i in series_info.values())
     log(f"\nlisto - {nuevos} dekads nuevos en total")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

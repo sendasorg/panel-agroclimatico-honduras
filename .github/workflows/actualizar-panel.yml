@@ -145,11 +145,20 @@ jobs:
           Generado por .github/workflows/actualizar-panel.yml"
           git push
 
-      # Una republicacion (codigo 1) no se resuelve sola: FAO cambio un dekad ya
+      # Una republicacion (codigo 3) no se resuelve sola: FAO cambio un dekad ya
       # guardado y alguien tiene que mirarlo antes de sobrescribir una cifra que
       # pudo haberse citado.
+      #
+      # El codigo es 3 y no 1 a proposito. Python sale con 1 ante cualquier
+      # excepcion sin atrapar, asi que mientras la republicacion salia con 1
+      # este paso no podia distinguir un diagnostico del constructor de un
+      # choque cualquiera. El 21 y el 22 de noviembre de 2026 el servidor de
+      # FAO devolvio 502, la construccion murio en la primera llamada de red y
+      # este paso abrio un issue anunciando una republicacion que nunca ocurrio,
+      # recomendando relanzar con aceptar_republicacion: la unica accion que
+      # sobrescribe cifras ya publicadas. Ver asis/build.py, EXIT_REPUBLICACION.
       - name: Avisar de republicacion
-        if: steps.construir.outputs.salida == '1'
+        if: steps.construir.outputs.salida == '3'
         uses: actions/github-script@v7
         with:
           script: |
@@ -182,8 +191,41 @@ jobs:
               });
             }
 
-      - name: Fallar si la construccion fallo
-        if: steps.construir.outputs.salida != '0'
+      # Cualquier salida que no sea 0 ni 3 es un fallo de verdad, no un
+      # diagnostico: el constructor se cayo. Se dice con esas palabras y se
+      # separa lo que no depende de nosotros -FAO sin responder- de lo que si,
+      # porque son dos acciones distintas: una es esperar y la otra es arreglar.
+      - name: Explicar el fallo
+        if: steps.construir.outputs.salida != '0' && steps.construir.outputs.salida != '3'
         run: |
-          echo "la construccion termino con codigo ${{ steps.construir.outputs.salida }}"
+          {
+            echo "### La construccion fallo"
+            echo
+            if grep -qE "asis-esri\.fao\.org|too many 50[0-9] error responses|MaxRetryError|RetryError" construccion.log; then
+              echo "**Los servicios de FAO no respondieron.** No es un problema"
+              echo "del panel: no se descargo ni se escribio nada, y los datos"
+              echo "versionados siguen intactos. No hay nada que arreglar de"
+              echo "este lado; cuando FAO vuelva, la corrida del dia siguiente"
+              echo "retoma sola desde donde quedo."
+            else
+              echo "**La construccion se cayo por una causa propia.** Revise el"
+              echo "registro: esto si pide un arreglo en el codigo."
+            fi
+            echo
+            echo "Codigo de salida: \`${{ steps.construir.outputs.salida }}\`."
+            echo "No es una republicacion; de serlo, el codigo seria 3 y habria"
+            echo "un issue con la etiqueta \`republicacion\`."
+            echo
+            echo '```'
+            tail -25 construccion.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      - name: Fallar si hubo republicacion sin aceptar
+        if: steps.construir.outputs.salida == '3'
+        run: |
+          echo "FAO republico dekads ya guardados y no se sobrescribio nada."
+          echo "Mire el issue con la etiqueta republicacion antes de relanzar"
+          echo "con aceptar_republicacion."
           exit 1
