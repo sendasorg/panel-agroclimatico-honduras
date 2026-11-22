@@ -145,11 +145,20 @@ jobs:
           Generado por .github/workflows/actualizar-panel.yml"
           git push
 
-      # Una republicacion (codigo 1) no se resuelve sola: FAO cambio un dekad ya
+      # Una republicacion (codigo 3) no se resuelve sola: FAO cambio un dekad ya
       # guardado y alguien tiene que mirarlo antes de sobrescribir una cifra que
       # pudo haberse citado.
+      #
+      # El codigo es 3 y no 1 a proposito. Python sale con 1 ante cualquier
+      # excepcion sin atrapar, asi que mientras la republicacion salia con 1
+      # este paso no podia distinguir un diagnostico del constructor de un
+      # choque cualquiera. El 21 y el 22 de noviembre de 2026 el servidor de
+      # FAO devolvio 502, la construccion murio en la primera llamada de red y
+      # este paso abrio un issue anunciando una republicacion que nunca ocurrio,
+      # recomendando relanzar con aceptar_republicacion: la unica accion que
+      # sobrescribe cifras ya publicadas. Ver asis/build.py, EXIT_REPUBLICACION.
       - name: Avisar de republicacion
-        if: steps.construir.outputs.salida == '1'
+        if: steps.construir.outputs.salida == '3'
         uses: actions/github-script@v7
         with:
           script: |
@@ -182,8 +191,57 @@ jobs:
               });
             }
 
-      - name: Fallar si la construccion fallo
-        if: steps.construir.outputs.salida != '0'
+      # Que la fuente no este (codigo 4) no es un fallo del panel y se resuelve
+      # esperando. Quien clasifica es el constructor, que tiene en la mano la
+      # excepcion que mato la corrida; aqui solo se lee el numero.
+      #
+      # La primera version de esto buscaba el error con grep en el registro, y
+      # eso estaba mal por partida doble. El registro guarda errores ya
+      # recuperados -export_tifs atrapa el fallo de un raster, lo imprime y
+      # sigue-, asi que un error de red de hace media hora tapaba la causa real
+      # de una caida posterior. Y el nombre del servidor no prueba nada: la URL
+      # viaja dentro de str(err), de modo que un 400 rechazado aparecia como
+      # caida de FAO y el aviso decia que no habia nada que arreglar.
+      - name: Avisar que la fuente no respondio
+        if: steps.construir.outputs.salida == '4'
         run: |
-          echo "la construccion termino con codigo ${{ steps.construir.outputs.salida }}"
+          {
+            echo "### Los servicios de FAO no respondieron"
+            echo
+            echo "No es un problema del panel: no se descargo ni se escribio"
+            echo "nada y los datos versionados siguen intactos. No hay nada que"
+            echo "arreglar de este lado; cuando FAO vuelva, la corrida del dia"
+            echo "siguiente retoma sola desde donde quedo."
+            echo
+            echo '```'
+            tail -25 construccion.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      # Lo que no es ninguno de los casos anteriores es un fallo propio, y se
+      # dice con esas palabras en vez de atribuirselo a nadie.
+      - name: Explicar el fallo
+        if: steps.construir.outputs.salida != '0' && steps.construir.outputs.salida != '3' && steps.construir.outputs.salida != '4'
+        run: |
+          {
+            echo "### La construccion se cayo por una causa propia"
+            echo
+            echo "Codigo de salida: \`${{ steps.construir.outputs.salida }}\`."
+            echo "No es una republicacion, que seria 3 y abriria un issue con"
+            echo "la etiqueta \`republicacion\`, ni una caida de la fuente, que"
+            echo "seria 4. Revise el registro: esto si pide un arreglo."
+            echo
+            echo '```'
+            tail -30 construccion.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      - name: Fallar si hubo republicacion sin aceptar
+        if: steps.construir.outputs.salida == '3'
+        run: |
+          echo "FAO republico dekads ya guardados y no se sobrescribio nada."
+          echo "Mire el issue con la etiqueta republicacion antes de relanzar"
+          echo "con aceptar_republicacion."
           exit 1

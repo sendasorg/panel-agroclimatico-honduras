@@ -44,6 +44,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
+import requests
 
 from asis import client, config as cfg
 from asis.aggregate import (department_weights, national_from_csv,
@@ -61,6 +62,48 @@ NATIONAL = {
     "serie_nacional_vci": dict(key="vci_dekad", value="Data", lta=None,
                                land_type=None),
 }
+
+
+# --- Codigos de salida -------------------------------------------------------
+# Son la interfaz con la actualizacion automatica, que decide por el numero que
+# paso: si fue una republicacion abre un aviso, si fue otra cosa deja la corrida
+# en rojo y lo dice.
+#
+# El 1 no se usa para nada propio, y eso es el punto. Antes la republicacion
+# salia con 1, que es tambien con lo que Python sale ante cualquier excepcion
+# sin atrapar, asi que el workflow no podia distinguirlas. Paso de verdad: el 21
+# y el 22 de noviembre de 2026 el servidor de rasteres de FAO devolvio 502, la
+# construccion murio en la primera llamada de red y el aviso automatico
+# anuncio una republicacion que nunca ocurrio, recomendando relanzar con
+# --aceptar-republicacion. Ese es justo el comando que sobrescribe cifras ya
+# publicadas: el diagnostico equivocado apuntaba a la unica accion destructiva
+# que el constructor sabe hacer.
+#
+# Por eso un diagnostico del constructor tiene que ser un numero que un choque
+# no pueda producir por accidente. Lo comprueba tests/test_salidas.py.
+EXIT_OK = 0
+EXIT_ARGS = 2
+EXIT_REPUBLICACION = 3
+EXIT_FUENTE = 4
+
+# Excepciones que significan "la fuente remota no contesto", no "el panel esta
+# mal". Se clasifican aqui, con la excepcion que mato la corrida en la mano, y
+# no buscando texto en el registro. Las dos razones salieron de revisar la
+# primera version de este arreglo, que si buscaba en el texto.
+#
+# El registro guarda errores de los que la construccion ya se repuso:
+# `export_tifs` atrapa el fallo de un raster, lo imprime y sigue con los demas.
+# Buscando en todo el texto, un error de red recuperado hace media hora tapaba
+# la causa real de una caida posterior.
+#
+# Y el nombre del servidor no prueba nada: `str(err)` de un HTTPError trae la
+# URL, asi que una peticion rechazada con 400 -que si pide mirar el codigo-
+# aparecia como caida de FAO y el aviso decia que no habia nada que arreglar.
+# Por eso HTTPError queda fuera: un 502 persistente agota los reintentos y
+# llega como RetryError o ConnectionError, que es lo que de verdad significa
+# que el servicio no esta.
+FUENTE_CAIDA = (requests.ConnectionError, requests.Timeout,
+                requests.exceptions.RetryError)
 
 
 def log(msg=""):
@@ -523,13 +566,34 @@ def parse_args(argv=None):
 
 
 def main(argv=None) -> int:
+    """Punto de entrada. Separa que la fuente no este de que el panel falle.
+
+    Son dos cosas distintas para quien las recibe: una se resuelve esperando y
+    la otra pide mirar el codigo. Cualquier otra excepcion se deja pasar a
+    proposito, con su traza entera y la salida 1 que pone Python: un fallo que
+    no entendemos no debe disfrazarse de diagnostico.
+    """
+    try:
+        return _construir(argv)
+    except FUENTE_CAIDA as err:
+        log("\n" + "=" * 68)
+        log(f"LA FUENTE NO RESPONDIO: {type(err).__name__}")
+        log(str(err)[:400])
+        log("No se descargo ni se escribio nada y el panel sigue intacto. No "
+            "hay nada que arreglar de este lado: cuando el servicio vuelva, la "
+            "proxima corrida retoma desde donde quedo.")
+        log("=" * 68)
+        return EXIT_FUENTE
+
+
+def _construir(argv=None) -> int:
     args = parse_args(argv)
     ids = ([s.strip() for s in args.series.split(",")] if args.series
            else list(cfg.SERIES))
     unknown = [s for s in ids if s not in cfg.SERIES]
     if unknown:
         log(f"serie desconocida: {unknown}. Conocidas: {list(cfg.SERIES)}")
-        return 2
+        return EXIT_ARGS
 
     log(f"panel: {cfg.PANEL_DIR}")
     log(f"cache de rasteres: {cfg.CACHE}")
@@ -540,7 +604,7 @@ def main(argv=None) -> int:
         if not atrasadas:
             log(f"\nel panel llega al ultimo dekad cerrado ({cierre}): no hay "
                 f"nada que FAO pueda haber publicado todavia. Sin consultar.")
-            return 0
+            return EXIT_OK
         log(f"\nultimo dekad cerrado {cierre} - atrasadas: "
             + ", ".join(f"{s} en {d or 'vacia'}"
                         for s, d in sorted(atrasadas.items())))
@@ -619,11 +683,11 @@ def main(argv=None) -> int:
             "con --aceptar-republicacion.")
         log("=" * 68)
         if not args.aceptar_republicacion:
-            return 1
+            return EXIT_REPUBLICACION
 
     nuevos = sum(i["nuevos"] for i in series_info.values())
     log(f"\nlisto - {nuevos} dekads nuevos en total")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":
