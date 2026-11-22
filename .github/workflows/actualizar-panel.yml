@@ -191,33 +191,49 @@ jobs:
               });
             }
 
-      # Cualquier salida que no sea 0 ni 3 es un fallo de verdad, no un
-      # diagnostico: el constructor se cayo. Se dice con esas palabras y se
-      # separa lo que no depende de nosotros -FAO sin responder- de lo que si,
-      # porque son dos acciones distintas: una es esperar y la otra es arreglar.
-      - name: Explicar el fallo
-        if: steps.construir.outputs.salida != '0' && steps.construir.outputs.salida != '3'
+      # Que la fuente no este (codigo 4) no es un fallo del panel y se resuelve
+      # esperando. Quien clasifica es el constructor, que tiene en la mano la
+      # excepcion que mato la corrida; aqui solo se lee el numero.
+      #
+      # La primera version de esto buscaba el error con grep en el registro, y
+      # eso estaba mal por partida doble. El registro guarda errores ya
+      # recuperados -export_tifs atrapa el fallo de un raster, lo imprime y
+      # sigue-, asi que un error de red de hace media hora tapaba la causa real
+      # de una caida posterior. Y el nombre del servidor no prueba nada: la URL
+      # viaja dentro de str(err), de modo que un 400 rechazado aparecia como
+      # caida de FAO y el aviso decia que no habia nada que arreglar.
+      - name: Avisar que la fuente no respondio
+        if: steps.construir.outputs.salida == '4'
         run: |
           {
-            echo "### La construccion fallo"
+            echo "### Los servicios de FAO no respondieron"
             echo
-            if grep -qE "asis-esri\.fao\.org|too many 50[0-9] error responses|MaxRetryError|RetryError" construccion.log; then
-              echo "**Los servicios de FAO no respondieron.** No es un problema"
-              echo "del panel: no se descargo ni se escribio nada, y los datos"
-              echo "versionados siguen intactos. No hay nada que arreglar de"
-              echo "este lado; cuando FAO vuelva, la corrida del dia siguiente"
-              echo "retoma sola desde donde quedo."
-            else
-              echo "**La construccion se cayo por una causa propia.** Revise el"
-              echo "registro: esto si pide un arreglo en el codigo."
-            fi
-            echo
-            echo "Codigo de salida: \`${{ steps.construir.outputs.salida }}\`."
-            echo "No es una republicacion; de serlo, el codigo seria 3 y habria"
-            echo "un issue con la etiqueta \`republicacion\`."
+            echo "No es un problema del panel: no se descargo ni se escribio"
+            echo "nada y los datos versionados siguen intactos. No hay nada que"
+            echo "arreglar de este lado; cuando FAO vuelva, la corrida del dia"
+            echo "siguiente retoma sola desde donde quedo."
             echo
             echo '```'
             tail -25 construccion.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      # Lo que no es ninguno de los casos anteriores es un fallo propio, y se
+      # dice con esas palabras en vez de atribuirselo a nadie.
+      - name: Explicar el fallo
+        if: steps.construir.outputs.salida != '0' && steps.construir.outputs.salida != '3' && steps.construir.outputs.salida != '4'
+        run: |
+          {
+            echo "### La construccion se cayo por una causa propia"
+            echo
+            echo "Codigo de salida: \`${{ steps.construir.outputs.salida }}\`."
+            echo "No es una republicacion, que seria 3 y abriria un issue con"
+            echo "la etiqueta \`republicacion\`, ni una caida de la fuente, que"
+            echo "seria 4. Revise el registro: esto si pide un arreglo."
+            echo
+            echo '```'
+            tail -30 construccion.log || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1

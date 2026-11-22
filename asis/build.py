@@ -44,6 +44,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
+import requests
 
 from asis import client, config as cfg
 from asis.aggregate import (department_weights, national_from_csv,
@@ -83,6 +84,26 @@ NATIONAL = {
 EXIT_OK = 0
 EXIT_ARGS = 2
 EXIT_REPUBLICACION = 3
+EXIT_FUENTE = 4
+
+# Excepciones que significan "la fuente remota no contesto", no "el panel esta
+# mal". Se clasifican aqui, con la excepcion que mato la corrida en la mano, y
+# no buscando texto en el registro. Las dos razones salieron de revisar la
+# primera version de este arreglo, que si buscaba en el texto.
+#
+# El registro guarda errores de los que la construccion ya se repuso:
+# `export_tifs` atrapa el fallo de un raster, lo imprime y sigue con los demas.
+# Buscando en todo el texto, un error de red recuperado hace media hora tapaba
+# la causa real de una caida posterior.
+#
+# Y el nombre del servidor no prueba nada: `str(err)` de un HTTPError trae la
+# URL, asi que una peticion rechazada con 400 -que si pide mirar el codigo-
+# aparecia como caida de FAO y el aviso decia que no habia nada que arreglar.
+# Por eso HTTPError queda fuera: un 502 persistente agota los reintentos y
+# llega como RetryError o ConnectionError, que es lo que de verdad significa
+# que el servicio no esta.
+FUENTE_CAIDA = (requests.ConnectionError, requests.Timeout,
+                requests.exceptions.RetryError)
 
 
 def log(msg=""):
@@ -545,6 +566,27 @@ def parse_args(argv=None):
 
 
 def main(argv=None) -> int:
+    """Punto de entrada. Separa que la fuente no este de que el panel falle.
+
+    Son dos cosas distintas para quien las recibe: una se resuelve esperando y
+    la otra pide mirar el codigo. Cualquier otra excepcion se deja pasar a
+    proposito, con su traza entera y la salida 1 que pone Python: un fallo que
+    no entendemos no debe disfrazarse de diagnostico.
+    """
+    try:
+        return _construir(argv)
+    except FUENTE_CAIDA as err:
+        log("\n" + "=" * 68)
+        log(f"LA FUENTE NO RESPONDIO: {type(err).__name__}")
+        log(str(err)[:400])
+        log("No se descargo ni se escribio nada y el panel sigue intacto. No "
+            "hay nada que arreglar de este lado: cuando el servicio vuelva, la "
+            "proxima corrida retoma desde donde quedo.")
+        log("=" * 68)
+        return EXIT_FUENTE
+
+
+def _construir(argv=None) -> int:
     args = parse_args(argv)
     ids = ([s.strip() for s in args.series.split(",")] if args.series
            else list(cfg.SERIES))
